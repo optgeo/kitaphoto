@@ -1,18 +1,22 @@
 {
   "version": 8,
-  "name": "kitaphoto (Hokkaido pilot) over seamlessphoto512",
+  "name": "kitaphoto over seamlessphoto512",
   "sources": {
     "seamlessphoto512-high": {
       "type": "raster",
-      "url": "pmtiles://https://depot.optgeo.org/seamlessphoto512.pmtiles",
+      "tiles": ["https://stars.optgeo.org/seamlessphoto512/{z}/{x}/{y}"],
       "tileSize": 512,
+      "minzoom": 13,
+      "maxzoom": 17,
       "attribution": "国土地理院 シームレス空中写真 (GSI seamlessphoto) CC BY 4.0"
     },
     "kitaphoto-low": {
       "type": "raster",
-      "_comment": "TODO: replace with the hosted URL once the pilot archive is deployed (see HANDOVER.md next steps). Locally, point this at pyramid_v4.pmtiles served via `pmtiles serve`.",
-      "url": "pmtiles://https://TODO-host-this/kitaphoto-hokkaido.pmtiles",
+      "_comment": "Matches martin's XYZ URL convention on stars.optgeo.org (same pattern as hfu/kitavolca's vbm/vlcm, hfu/japan-seamless-aerial-z18). Only valid once `just upload` + a martin restart on stars.local have happened — see HANDOVER.md.",
+      "tiles": ["https://stars.optgeo.org/kitaphoto/{z}/{x}/{y}"],
       "tileSize": 512,
+      "minzoom": 2,
+      "maxzoom": 12,
       "attribution": "国土地理院 シームレス空中写真 (GSI seamlessphoto) CC BY 4.0, reprocessed by kitaphoto"
     }
   },

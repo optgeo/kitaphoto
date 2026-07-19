@@ -31,21 +31,20 @@ lower-quality satellite source than what's actually visible at z13.
 
 z13–17 tiles are left untouched (pass-through) — they're already correct.
 
-## Scope (pilot)
+## Scope
 
-Limited to the z=4/x=14/y=5 tile (bbox `135.0,40.97989806962013,157.5,55.77657301866769` —
-Hokkaido, Sakhalin, and surrounding sea), matching the region used in
-[hfu/4145](https://github.com/hfu/4145). Measured with `pmtiles extract --dry-run` against the
-source archive:
+Piloted on the z=4/x=14/y=5 tile (Hokkaido, Sakhalin, and surrounding sea — the same region
+used in [hfu/4145](https://github.com/hfu/4145)), then rolled out nationwide once the pilot
+algorithm was validated (black-nodata-pixel cleaning, GSI-live fallback tier — see
+HANDOVER.md). Current output: `dst/kitaphoto.pmtiles`, z2–12, 747MB, 12,324 tiles, built from a
+2.3GB z13 seed + 1.4GB z1–12 fallback (both extracted from the 715GB source archive via
+`pmtiles extract`, never downloaded in full). Small enough to build entirely on a single
+machine — no need for the 3TB SSD on `slate.local` originally considered for this project.
 
-| data | size |
-|---|---|
-| z13 seed (this pipeline's input) | 636 MB |
-| current z1–12 in this region (what we're replacing) | 375 MB |
-| new z1–12 pyramid (estimated, ~4/3 × z13 size) | ~850 MB |
-
-Small enough to build entirely on a single machine — no need for the 3TB SSD on `slate.local`
-originally considered for this project.
+Runs on `/Users/hfu/kitaphoto` (persistent checkout, not session scratch space).
+`dst/kitaphoto.pmtiles` is `.gitignore`d (same pattern as `hfu/kitavolca`'s `dst/*.pmtiles`) —
+regenerate it with `just extract && just downsample`, or `just upload` it to `stars.local` once
+built.
 
 ## Pipeline
 

@@ -1,6 +1,6 @@
 # Project Handover — kitaphoto
 
-## Nationwide rollout in progress (2026-07-19)
+## Nationwide rollout: built and verified, not yet deployed (2026-07-19)
 
 Pilot algorithm accepted after the black-nodata-pixel fix. User decisions for the production
 run:
@@ -45,9 +45,69 @@ Against the full archive bounds (`122.920532,20.406420,153.989868,45.541946`):
 - `work/seed_z13.pmtiles`: 2.3GB, 31,815 tile entries (5m25s)
 - `work/fallback_z1-12.pmtiles`: 1.4GB, 89,336 tile entries (2m51s)
 
-Matches the earlier dry-run estimates (2.3GB / 1.4-1.5GB) closely. Nationwide downsample build
-kicked off immediately after (`just downsample`, running as of this writing — see below for
-results once complete).
+Matches the earlier dry-run estimates (2.3GB / 1.4-1.5GB) closely.
+
+### First nationwide downsample attempt: OOM-killed (exit 137)
+
+`just downsample` was killed by the OS (`Killed: 9`, SIGKILL) partway through. Root cause:
+`load_level()` held every decoded z13 tile as a `PIL.Image` simultaneously — fine for the
+Hokkaido pilot (8,887 tiles, ~6.6GB decoded, fit under this machine's 8GB RAM) but nationwide's
+31,831 tiles at raw 512×512×3 pixels is **~23GB decoded**, far past the ceiling. This is the
+same class of problem `hfu/photosynthesis`'s HANDOVER.md flagged for this machine (8GB RAM is
+the binding constraint behind most crashes on it) — should have sized this from the tile count
+before running nationwide rather than after.
+
+**Fix**: rewrote `downsample.py` so every level dict holds compressed JPEG bytes, not decoded
+pixels — `load_level()`, `downsample_level()`, and `fetch_gsi_tile`'s cache all decode
+transiently (one tile/parent-group at a time) and re-encode immediately. Compressed, the z13
+seed is ~2.3GB instead of ~23GB. Also had to restructure `main()`: PMTiles requires ascending
+tile_id (= ascending zoom) write order, so levels can't stream straight to the writer as
+they're cascaded (that would emit z12 before z11) — output levels are buffered (cheap now,
+~1GB total for z2-12 combined, since the large seed itself is dropped right after producing
+z12 and is never written) and written out in ascending-zoom order at the end.
+
+Re-validated against the Hokkaido pilot data first: identical tile count (3,421) and
+`pmtiles verify` passes, confirming the rewrite changed memory behavior only, not output —
+*then* re-ran nationwide.
+
+### Nationwide downsample: succeeded (2026-07-19)
+
+```
+$ just downsample
+loading seed level z13...  cleaned black nodata pixels in 6,277 tiles (of 31,831 total — 19.7%,
+higher than the Hokkaido pilot's 13.2%, plausible given more coastline/complex terrain nationwide)
+z12: 8,639 tiles (2,725 backfilled from depot z1-12, 0 from GSI live, 0 still missing)
+z11: 2,480 tiles (1,281 backfilled, 0 GSI live, 0 missing)
+z10: 769 tiles (596 backfilled, 0 GSI live, 0 missing)
+z9: 258 tiles (263 backfilled, 0 GSI live, 0 missing)
+z8: 97 tiles (130 backfilled, 0 GSI live, 0 missing)
+z7: 42 tiles (71 backfilled, 0 GSI live, 0 missing)
+z6: 22 tiles (46 backfilled, 0 GSI live, 0 missing)
+z5: 9 tiles (14 backfilled, 0 GSI live, 0 missing)
+z4: 4 tiles (7 backfilled, 0 GSI live, 0 missing)
+z3: 3 tiles (8 backfilled, 0 GSI live, 0 missing)
+z2: 1 tile (1 backfilled, 0 GSI live, 0 missing)
+wrote dst/kitaphoto.pmtiles: 12,324 tiles, z2-12
+```
+
+12 minutes total (vs ~3-5 min for the Hokkaido pilot, ~3.6x the tiles). **Zero unrecoverable
+gaps at every level** — nationwide, depot's own z1-12 archive apparently had enough coverage
+that the GSI-live third tier wasn't even needed for whole-quadrant gaps this run (it was still
+used heavily for the per-pixel black-nodata cleaning: 6,277 tiles). Peak memory stayed well
+under 8GB throughout (spot-checked via `ps` during the run — fluctuated roughly 100MB-1.2GB,
+consistent with the compressed-bytes design). Final size: **747MB** (`dst/kitaphoto.pmtiles`),
+`pmtiles verify` passes.
+
+**Visual spot checks outside Hokkaido** (to confirm nationwide coverage, not just the pilot
+region): Tokyo Bay (z11, tile 1819/806) shows sharp real aerial-photo detail — roads, buildings,
+waterways, reclaimed land all legible. Fukuoka area (z9, tile 441/205) shows correct broad
+coverage with visible color/tone seams between adjacent source photos (different capture
+dates/sensors in GSI's own underlying mosaic) — expected mosaic character, not a processing
+defect.
+
+**Status: nationwide `dst/kitaphoto.pmtiles` built and verified. Not yet uploaded to
+stars.local — pending go-ahead, since that's a shared production service (`stars.optgeo.org` +
+`depot.optgeo.org` both read from the same martin instance).**
 
 ## Status: pilot pipeline proven end-to-end on real data (2026-07-19)
 

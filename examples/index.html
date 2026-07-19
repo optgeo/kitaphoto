@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css" rel="stylesheet" />
-  <script src="https://unpkg.com/pmtiles@latest/dist/pmtiles.js"></script>
   <style>
     body { margin: 0; }
     #map { width: 100vw; height: 100vh; }
@@ -15,17 +14,10 @@
 <body>
 <div id="map"></div>
 <script>
-  // Registers the pmtiles:// protocol so style.json sources can use
-  // "url": "pmtiles://<archive-url>" directly (no manual {z}/{x}/{y}
-  // template needed — the protocol resolves tiles from the archive).
-  let protocol = new pmtiles.Protocol();
-  maplibregl.addProtocol("pmtiles", protocol.tile);
-
-  // style.json points kitaphoto-low at a TODO placeholder URL — for a
-  // local preview, run `pmtiles serve .` in the directory containing
-  // pyramid_v4.pmtiles (renamed/copied to kitaphoto-hokkaido.pmtiles) and
-  // edit style.json's "kitaphoto-low" source url to
-  // "pmtiles://http://localhost:8080/kitaphoto-hokkaido.pmtiles" first.
+  // style.json's kitaphoto-low source only resolves once dst/kitaphoto.pmtiles
+  // has been uploaded (`just upload`) and martin restarted on stars.local —
+  // see HANDOVER.md. Until then this shows real tiles above z13 and nothing
+  // below.
   const map = new maplibregl.Map({
     container: "map",
     hash: true,
