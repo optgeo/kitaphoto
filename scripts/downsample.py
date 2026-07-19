@@ -3,20 +3,28 @@ Build a z(N-1)..z1 pyramid from a single-zoom PMTiles seed via 2x2 box-average
 downsampling, cascading one level at a time (mapterhorn-style).
 
 Where the seed has no coverage for a quadrant (no real aerial photo *and* no
-GSI satellite gap-fill at that finer zoom), fall back to the ORIGINAL
-low-zoom GSI tile (Landsat/world-satellite mosaic) for that quadrant, cropped
-to the right sub-region, instead of leaving a black hole. This is what makes
-"areas without high-quality aerial photos keep using satellite imagery" true
-even where the seed zoom itself has a genuine gap (observed in practice: some
-locations have literally zero-byte-pattern corrupt tiles in the source
-archive, not just low quality ones — see HANDOVER.md).
+GSI satellite gap-fill at that finer zoom), fall back — in order — to:
+
+  1. the ORIGINAL low-zoom GSI tile as already packaged in depot.optgeo.org's
+     seamlessphoto512.pmtiles (cropped to the matching sub-region), then
+  2. GSI's own live seamlessphoto XYZ endpoint, fetching the same tile fresh.
+
+Tier 2 exists because depot's own z1-12 layer turns out to have a systemic
+corruption problem — 7.4% of tiles in our Hokkaido sample decode to literal
+all-zero bytes despite plausible-looking lengths — while GSI's live server
+had valid data at every corrupt spot checked (see HANDOVER.md). Tier 1 is
+tried first because it's already local/extracted and doesn't need network
+round-trips; tier 2 only runs for the minority of quadrants where tier 1 is
+itself missing or corrupt.
 
 Usage: python downsample.py <seed.pmtiles> <seed_zoom> <fallback.pmtiles> <output.pmtiles>
 """
+import functools
 import io
 import sys
 from collections import defaultdict
 
+import requests
 from PIL import Image, UnidentifiedImageError
 
 from pmtiles.reader import Reader, MmapSource, all_tiles
@@ -25,6 +33,10 @@ from pmtiles.writer import Writer
 
 TILE_SIZE = 512
 JPEG_QUALITY = 85
+GSI_URL_TEMPLATE = 'https://maps.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
+GSI_TIMEOUT = 10
+
+_http = requests.Session()
 
 
 def load_level(path, zoom):
@@ -79,7 +91,8 @@ def downsample_level(tiles, zoom, fallback_index):
 
     half = TILE_SIZE // 2
     out = {}
-    fallback_used = 0
+    depot_used = 0
+    gsi_used = 0
     still_missing = 0
     for (px, py) in all_px:
         quads = parents[(px, py)]
@@ -88,32 +101,67 @@ def downsample_level(tiles, zoom, fallback_index):
             for qy in (0, 1):
                 if (qx, qy) in quads:
                     small = quads[(qx, qy)].resize((half, half), Image.LANCZOS)
+                    canvas.paste(small, (qx * half, qy * half))
+                    continue
+                small = fallback_quadrant(fallback_index, zoom - 1, px, py, qx, qy, half)
+                if small is not None:
+                    depot_used += 1
                 else:
-                    small = fallback_quadrant(fallback_index, zoom - 1, px, py, qx, qy, half)
+                    small = gsi_live_quadrant(zoom - 1, px, py, qx, qy, half)
                     if small is not None:
-                        fallback_used += 1
+                        gsi_used += 1
                     else:
                         still_missing += 1
                         small = Image.new('RGB', (half, half), (0, 0, 0))
                 canvas.paste(small, (qx * half, qy * half))
         out[(px, py)] = canvas
-    if fallback_used or still_missing:
-        print(f'    z{zoom - 1}: {fallback_used} quadrants backfilled from original, '
-              f'{still_missing} still missing (no fallback data either)')
+    if depot_used or gsi_used or still_missing:
+        print(f'    z{zoom - 1}: {depot_used} quadrants backfilled from depot z1-12, '
+              f'{gsi_used} from GSI live, {still_missing} still missing (no data anywhere)')
     return out
 
 
 def fallback_quadrant(fallback_index, parent_zoom, px, py, qx, qy, half):
-    """Crop the (qx, qy) quadrant out of the ORIGINAL tile at (parent_zoom, px, py)."""
+    """Crop the (qx, qy) quadrant out of the ORIGINAL depot tile at (parent_zoom, px, py)."""
     tile_bytes = fallback_index.get((parent_zoom, px, py))
     if tile_bytes is None:
         return None
     img = safe_decode(tile_bytes)
     if img is None:
         return None
+    return crop_quadrant(img, qx, qy, half)
+
+
+def gsi_live_quadrant(parent_zoom, px, py, qx, qy, half):
+    """Crop the (qx, qy) quadrant out of a live GSI tile at (parent_zoom, px, py)."""
+    img = fetch_gsi_tile(parent_zoom, px, py)
+    if img is None:
+        return None
+    return crop_quadrant(img, qx, qy, half)
+
+
+def crop_quadrant(img, qx, qy, half):
     w, h = img.size
     box = (qx * w // 2, qy * h // 2, (qx + 1) * w // 2, (qy + 1) * h // 2)
     return img.crop(box).resize((half, half), Image.LANCZOS)
+
+
+@functools.lru_cache(maxsize=None)
+def fetch_gsi_tile(zoom, x, y):
+    """Fetch GSI's native 256px tile at (zoom, x, y) directly (single request).
+
+    Same z/x/y index as depot's 512px tile at that zoom — verified directly:
+    both known-corrupt depot tiles (z12/3655/1497, z12/3641/1520) return a
+    valid 256px JPEG from this exact z/x/y on GSI's live server.
+    """
+    url = GSI_URL_TEMPLATE.format(z=zoom, x=x, y=y)
+    try:
+        resp = _http.get(url, timeout=GSI_TIMEOUT)
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    return safe_decode(resp.content)
 
 
 def encode_jpeg(img):
@@ -191,8 +239,8 @@ def main():
                 'description': (
                     f'kitaphoto: z{seed_zoom} GSI seamlessphoto512 downsampled '
                     f'to z{min_zoom}-{max_zoom - 1} via 2x2 box averaging, with '
-                    f'original low-zoom satellite mosaic as fallback for gaps '
-                    f'(z{max_zoom} is the untouched seed, included for reference)'
+                    f'depot low-zoom satellite mosaic and GSI live tiles as fallback '
+                    f'for gaps (z{max_zoom} is the untouched seed, included for reference)'
                 ),
             },
         )

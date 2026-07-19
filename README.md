@@ -53,9 +53,11 @@ originally considered for this project.
    z1–12 tiles) for the target bbox from `https://depot.optgeo.org/seamlessphoto512.pmtiles`.
 2. **Downsample** (`scripts/downsample.py`) — build the z12→z1(ish) pyramid via 2×2 box
    averaging + JPEG re-encode, cascading down from the z13 seed. Where the seed has no coverage
-   for a quadrant, fall back to the original low-zoom GSI tile (cropped to the matching
-   sub-region) rather than leaving a black hole — see HANDOVER.md for why this matters in
-   practice (the source archive has real gaps, including at least one corrupt tile).
+   for a quadrant, fall back — in order — to (a) the original low-zoom GSI tile as packaged in
+   depot's archive, cropped to the matching sub-region, then (b) GSI's own live seamlessphoto
+   endpoint, fetched fresh. Tier (b) exists because depot's z1-12 layer turns out to have a
+   systemic corruption problem (7.4% of tiles in our sample decode to literal all-zero bytes)
+   that GSI's live server doesn't have — see HANDOVER.md.
 3. **Ship as a patch archive** — the output only covers the zoom range it actually changes
    (roughly z1/4–12). z13–17 are left exactly as published in the original archive; there's no
    need to duplicate 190GB of unchanged data. At serving time, combine as two raster sources by
@@ -67,6 +69,11 @@ originally considered for this project.
    satellite-only areas.
 
 See [HANDOVER.md](HANDOVER.md) for current status, size measurements, and validation findings.
+
+## Requirements
+
+`go-pmtiles` (`pmtiles` CLI, for `extract`/`show`/`tile`/`verify` — its `merge` subcommand is
+known broken, see HANDOVER.md) and Python 3 with `pmtiles`, `Pillow`, and `requests`.
 
 ## Data source and attribution
 

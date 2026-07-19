@@ -224,19 +224,47 @@ Extending `scripts/downsample.py`'s `fallback_quadrant()` so the order is:
    network dependency at build time (rate-limited, so only hit for the actual gap count — a
    few hundred requests for this pilot region, not millions).
 
+## GSI-live third fallback tier — implemented and validated (2026-07-19)
+
+`scripts/downsample.py`'s `fallback_quadrant()` path is now three tiers: seed (z13) → depot
+z1-12 (cropped from the tile already extracted locally) → GSI live (`fetch_gsi_tile()`, single
+request to `https://maps.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg` at the *same* z/x/y as the
+target tile — verified directly, not the z+1 children used for the earlier root-cause check:
+both known-corrupt depot tiles return valid 256px JPEGs at their own z/x/y on GSI's live
+server). `functools.lru_cache` avoids re-fetching the same parent tile for multiple missing
+quadrants of the same parent.
+
+Re-ran the full Hokkaido bbox pyramid build (`downsample.py high_z13.pmtiles 13
+low_z1-12.pmtiles pyramid_v3.pmtiles`) with tier 3 enabled:
+
+| level | depot z1-12 | GSI live | still missing |
+|---|---|---|---|
+| z12 | 345 | **416** | **0** (was 416) |
+| z11-z4 | (as before) | 0 | 0 |
+
+**Every previously-unrecoverable gap closed** — the 416 quadrants that neither the seed nor
+depot's z1-12 could supply all came back from GSI's live server. Re-checked the worst offender
+(z12 tile 3655/1497, previously 3 of 4 quadrants black) pixel-by-pixel post-fix: all 4
+quadrants now have non-zero luminance range (e.g. min 0/max 93 — genuinely dark real content
+like deep water or shadow, not a black fill placeholder). Total build time for the whole
+Hokkaido bbox cascade (z13→z4), including ~416 live GSI requests: ~2m47s, negligible overhead
+vs. the ~2m40s no-network-fallback run.
+
+**Current state: zero known unrecoverable gaps in the Hokkaido pilot region.**
+
 ## Next steps
 
-1. Implement and validate the GSI-live third fallback tier (in progress this session).
-2. Re-check the z12 gap rate after tier 3 lands — expect it to drop sharply given GSI had valid
-   data at 100% of the spots sampled so far; re-evaluate whether any gap remains acceptable to
-   ship as-is.
-3. Run the full pipeline for **all** z4 tiles needed to cover Hokkaido properly (this session
+1. Run the full pipeline for **all** z4 tiles needed to cover Hokkaido properly (this session
    only processed the single z4/14/5 tile — confirm whether that one tile's coverage is
    actually sufficient, or whether Hokkaido's true extent needs neighboring z4 tiles too).
-4. Decide on final min zoom — this run went down to z4 (limited by the seed data's actual
+2. Decide on final min zoom — this run went down to z4 (limited by the seed data's actual
    extent within the bbox); confirm whether the real deliverable should extend further down
    (z1-3) using the original low-zoom tiles unmodified (they're already appropriately coarse
    world/nationwide mosaics at that level) or stop at z4.
-5. Write a small end-user viewer (à la `hfu/japan-seamless-aerial-z18`'s `index.html`) to
+3. Write a small end-user viewer (à la `hfu/japan-seamless-aerial-z18`'s `index.html`) to
    preview the patch archive layered under the original z13-17, for a final visual sign-off
    before considering deployment to `stars.optgeo.org`'s martin catalog.
+4. Consider whether to report the depot.optgeo.org z1-12 corruption (7.4% of tiles in the
+   Hokkaido sample) upstream to whoever maintains that build, independent of this project —
+   it likely affects every consumer of `seamlessphoto512.pmtiles`'s low zoom levels, not just
+   this pipeline.
