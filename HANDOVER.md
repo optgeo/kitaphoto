@@ -181,18 +181,62 @@ coastline in the same tile is unaffected.
   error, ~2 minutes, resolved on its own) — not something on our end, just noting in case it
   recurs.
 
+## Root cause of the corrupt tiles: confirmed as a depot.optgeo.org build defect, not GSI (2026-07-19)
+
+Asked whether GSI's own source was fine or the corruption was introduced when
+`seamlessphoto512.pmtiles` was built. Checked directly:
+
+- Mapped both known-bad 512px tiles back to their native GSI 256px children (a 512px zN tile =
+  a 2×2 mosaic of GSI's native 256px z(N+1) tiles at the same x,y*2/y*2+1 — matches the
+  metadata's "z1-17 from z2-z18") and fetched them live from
+  `https://maps.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg`:
+  - z12/3655/1497 → z13 children (7310,2994),(7311,2994),(7310,2995),(7311,2995): **all 4
+    HTTP 200, valid JPEGs**. Opened one — real satellite ocean texture, not blank.
+  - z12/3641/1520 (the large "still missing" black region from the mixed-quadrant screenshot)
+    → z13 children (7282,3040),(7283,3040),(7282,3041),(7283,3041): **all 4 HTTP 200, valid
+    JPEGs.**
+- **GSI's live server has real data everywhere we checked. The corruption is specific to
+  depot.optgeo.org's `seamlessphoto512.pmtiles`.**
+- Scanned the *entire* `low_z1-12.pmtiles` extract (76,506 tiles, Hokkaido bbox) for
+  undecodable content: **5,692 tiles (7.4%) are corrupt** — same signature as before (content
+  length looks like a real tile's size, 17KB-125KB, but every byte is literal `\x00`). This is
+  systemic within the z1-12 (Landsat/world-satellite) layer of the depot archive, not an
+  isolated tile.
+- Same scan against `high_z13.pmtiles` (8,887 tiles, our actual downsampling seed): **0
+  corrupt tiles** in this sample. The corruption so far appears confined to the low-zoom
+  (z1-12) layer.
+
+**Implication**: our two-tier fallback (seed → depot z1-12) inherits depot's z1-12 corruption
+directly — that's the root cause of the 416 "still missing" z12 quadrants (out of 9,648, 4.3%)
+recorded above. Since GSI's live server is confirmed good at every spot checked, adding it as a
+third fallback tier should recover most or all of that gap.
+
+## In progress: third fallback tier — GSI live server
+
+Extending `scripts/downsample.py`'s `fallback_quadrant()` so the order is:
+
+1. Seed zoom (z13, real photo / gap-satellite blend) — as before.
+2. `depot z1-12` archive (fast, local/already-extracted) — as before.
+3. **New**: if both above are missing or fail to decode, fetch the matching GSI native 256px
+   tile(s) live from `https://maps.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg` (z = our pyramid
+   zoom + 1, since GSI's 256px grid at zoom N+1 has the same index space as our 512px zoom N)
+   and crop out the matching quadrant, same as the depot-fallback crop logic. Introduces a
+   network dependency at build time (rate-limited, so only hit for the actual gap count — a
+   few hundred requests for this pilot region, not millions).
+
 ## Next steps
 
-1. Decide: is the z12 gap rate (~4.3% of quadrants, concentrated in what looks like open-water/
-   remote areas) acceptable to ship as-is, or worth investigating further (e.g. is there a
-   pattern — all near a specific coastline, all corrupt-tile artifacts, etc.)?
-2. Run the full pipeline for **all** z4 tiles needed to cover Hokkaido properly (this session
+1. Implement and validate the GSI-live third fallback tier (in progress this session).
+2. Re-check the z12 gap rate after tier 3 lands — expect it to drop sharply given GSI had valid
+   data at 100% of the spots sampled so far; re-evaluate whether any gap remains acceptable to
+   ship as-is.
+3. Run the full pipeline for **all** z4 tiles needed to cover Hokkaido properly (this session
    only processed the single z4/14/5 tile — confirm whether that one tile's coverage is
    actually sufficient, or whether Hokkaido's true extent needs neighboring z4 tiles too).
-3. Decide on final min zoom — this run went down to z4 (limited by the seed data's actual
+4. Decide on final min zoom — this run went down to z4 (limited by the seed data's actual
    extent within the bbox); confirm whether the real deliverable should extend further down
    (z1-3) using the original low-zoom tiles unmodified (they're already appropriately coarse
    world/nationwide mosaics at that level) or stop at z4.
-4. Write a small end-user viewer (à la `hfu/japan-seamless-aerial-z18`'s `index.html`) to
+5. Write a small end-user viewer (à la `hfu/japan-seamless-aerial-z18`'s `index.html`) to
    preview the patch archive layered under the original z13-17, for a final visual sign-off
    before considering deployment to `stars.optgeo.org`'s martin catalog.
