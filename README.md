@@ -81,6 +81,16 @@ See [HANDOVER.md](HANDOVER.md) for current status, size measurements, and valida
 `go-pmtiles` (`pmtiles` CLI, for `extract`/`show`/`tile`/`verify` — its `merge` subcommand is
 known broken, see HANDOVER.md) and Python 3 with `pmtiles`, `Pillow`, `numpy`, and `requests`.
 
+## License
+
+This repository's own code (`scripts/`, `Justfile`, `docs/`) is dedicated to the public domain
+under [CC0 1.0](LICENSE).
+
+`dst/kitaphoto.pmtiles` is a derivative of GSI's seamlessphoto imagery (see below) and is *not*
+covered by that CC0 dedication — it remains subject to the source data's CC BY 4.0 attribution
+requirement, since CC0 on this repo's code can't waive a license obligation inherited from
+someone else's upstream work. Keep the attribution below with any redistribution of the tiles.
+
 ## Data source and attribution
 
 - Source: `https://depot.optgeo.org/seamlessphoto512.pmtiles` (GSI seamlessphoto, re-tiled to
