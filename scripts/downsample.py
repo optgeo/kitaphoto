@@ -40,6 +40,18 @@ min_zoom (default 2): the pyramid keeps cascading down to this zoom even
 after it converges to a single tile (harmless — a single coarse tile is a
 normal thing to have at low global zooms), rather than stopping as soon as
 the tile count reaches 1.
+
+Memory note: every level dict holds COMPRESSED JPEG bytes, not decoded
+pixels — decoding happens transiently inside downsample_level(), one
+parent group at a time, and the result is re-encoded before storage. This
+matters at nationwide scale: this machine has 8GB RAM, and 31,815 z13
+tiles at raw 512x512x3 pixels would be ~23GB decoded simultaneously (an
+earlier version of this script held the whole level as PIL Images and was
+OOM-killed nationwide, despite working fine on the smaller Hokkaido
+pilot). Compressed, the same level is ~2.3GB — fits comfortably. Each
+level is also written to the output and discarded as soon as the next
+level is built, so at most two levels' worth of compressed bytes are ever
+held at once.
 """
 import functools
 import io
@@ -63,8 +75,12 @@ _http = requests.Session()
 
 
 def load_level(path, zoom):
-    """Return {(x, y): PIL.Image} for the given zoom level, with black nodata
-    pixels within each tile replaced by GSI's own satellite imagery."""
+    """Return {(x, y): jpeg_bytes} for the given zoom level, with black nodata
+    pixels within each tile replaced by GSI's own satellite imagery.
+
+    Stores compressed bytes, not decoded images — see module docstring's
+    memory note. Tiles that didn't need cleaning keep their original bytes
+    unchanged (no redundant re-encode / quality loss)."""
     tiles = {}
     n_cleaned = 0
     with open(path, 'r+b') as f:
@@ -75,9 +91,9 @@ def load_level(path, zoom):
             img = safe_decode(tile_bytes)
             if img is None:
                 continue
-            img, cleaned = clean_seed_tile(img, zoom, x, y)
+            cleaned_img, cleaned = clean_seed_tile(img, zoom, x, y)
             n_cleaned += cleaned
-            tiles[(x, y)] = img
+            tiles[(x, y)] = encode_jpeg(cleaned_img) if cleaned else tile_bytes
     print(f'  cleaned black nodata pixels in {n_cleaned:_} tiles')
     return tiles
 
@@ -124,16 +140,21 @@ def load_fallback_index(path):
 def downsample_level(tiles, zoom, fallback_index):
     """2x2 box-average tiles at `zoom` into tiles at `zoom - 1`.
 
+    `tiles` and the return value are both {(x, y): jpeg_bytes} — each source
+    tile is decoded only for the duration of building its parent canvas, and
+    each output canvas is re-encoded immediately (see module docstring's
+    memory note; this is what keeps nationwide-scale runs within 8GB RAM).
+
     Missing quadrants are backfilled from the original low-zoom archive
     (cropped to the matching sub-region) when available; left black only if
     the fallback also has no usable data there.
     """
-    parents = defaultdict(dict)  # (px, py) -> {quadrant: img}
+    parents = defaultdict(dict)  # (px, py) -> {quadrant: jpeg_bytes}
     all_px = set()
-    for (x, y), img in tiles.items():
+    for (x, y), tile_bytes in tiles.items():
         px, py = x // 2, y // 2
         qx, qy = x % 2, y % 2
-        parents[(px, py)][(qx, qy)] = img
+        parents[(px, py)][(qx, qy)] = tile_bytes
         all_px.add((px, py))
 
     half = TILE_SIZE // 2
@@ -147,7 +168,8 @@ def downsample_level(tiles, zoom, fallback_index):
         for qx in (0, 1):
             for qy in (0, 1):
                 if (qx, qy) in quads:
-                    small = quads[(qx, qy)].resize((half, half), Image.LANCZOS)
+                    img = safe_decode(quads[(qx, qy)])
+                    small = img.resize((half, half), Image.LANCZOS)
                     canvas.paste(small, (qx * half, qy * half))
                     continue
                 small = fallback_quadrant(fallback_index, zoom - 1, px, py, qx, qy, half)
@@ -161,7 +183,7 @@ def downsample_level(tiles, zoom, fallback_index):
                         still_missing += 1
                         small = Image.new('RGB', (half, half), (0, 0, 0))
                 canvas.paste(small, (qx * half, qy * half))
-        out[(px, py)] = canvas
+        out[(px, py)] = encode_jpeg(canvas)
     if depot_used or gsi_used or still_missing:
         print(f'    z{zoom - 1}: {depot_used} quadrants backfilled from depot z1-12, '
               f'{gsi_used} from GSI live, {still_missing} still missing (no data anywhere)')
@@ -193,13 +215,24 @@ def crop_quadrant(img, qx, qy, half):
     return img.crop(box).resize((half, half), Image.LANCZOS)
 
 
-@functools.lru_cache(maxsize=None)
 def fetch_gsi_tile(zoom, x, y):
+    """Decoded GSI live tile at (zoom, x, y) — thin decode wrapper around the
+    cached compressed fetch below, so the cache itself stays small."""
+    tile_bytes = fetch_gsi_tile_bytes(zoom, x, y)
+    if tile_bytes is None:
+        return None
+    return safe_decode(tile_bytes)
+
+
+@functools.lru_cache(maxsize=None)
+def fetch_gsi_tile_bytes(zoom, x, y):
     """Fetch GSI's native 256px tile at (zoom, x, y) directly (single request).
 
     Same z/x/y index as depot's 512px tile at that zoom — verified directly:
     both known-corrupt depot tiles (z12/3655/1497, z12/3641/1520) return a
-    valid 256px JPEG from this exact z/x/y on GSI's live server.
+    valid 256px JPEG from this exact z/x/y on GSI's live server. Cached as
+    compressed bytes, not decoded pixels — nationwide this can be several
+    thousand unique tiles (see module docstring's memory note).
     """
     url = GSI_URL_TEMPLATE.format(z=zoom, x=x, y=y)
     try:
@@ -208,7 +241,7 @@ def fetch_gsi_tile(zoom, x, y):
         return None
     if resp.status_code != 200:
         return None
-    return safe_decode(resp.content)
+    return resp.content
 
 
 def encode_jpeg(img):
@@ -242,28 +275,28 @@ def main():
     fallback_index = load_fallback_index(fallback_path)
     print(f'  {len(fallback_index):_} fallback tiles indexed')
 
-    levels = {seed_zoom: level}
+    # PMTiles requires tiles written in ascending tile_id order, which means
+    # ascending zoom (all z12 ids < all z13 ids, etc.) — so levels can't be
+    # streamed out as they're built (that would write z12 before z11, wrong
+    # direction). Instead: cascade first, keeping only compressed bytes for
+    # each *output* level (cheap — the seed itself is the only large one,
+    # and it's dropped immediately after producing z(seed-1), never written).
+    output_levels = {}
     z = seed_zoom
     while z > target_min_zoom:
-        prev = levels[z]
-        nxt = downsample_level(prev, z, fallback_index)
+        level = downsample_level(level, z, fallback_index)
         z -= 1
-        levels[z] = nxt
-        print(f'  z{z}: {len(nxt):_} tiles')
+        print(f'  z{z}: {len(level):_} tiles')
+        output_levels[z] = level
 
-    # The seed zoom itself is never written — it stays served straight from
-    # the original archive (see module docstring).
-    written_zooms = [z for z in levels if z != seed_zoom]
-    min_zoom = min(written_zooms)
-    max_zoom = max(written_zooms)
-
+    min_zoom = target_min_zoom
+    max_zoom = seed_zoom - 1
     min_lon, min_lat, max_lon, max_lat = 180.0, 90.0, -180.0, -90.0
     total = 0
     with open(output_path, 'wb') as out_f:
         writer = Writer(out_f)
-        for z in sorted(written_zooms):
-            for (x, y), img in sorted(levels[z].items()):
-                tile_bytes = encode_jpeg(img)
+        for z in sorted(output_levels):
+            for (x, y), tile_bytes in sorted(output_levels[z].items()):
                 tile_id = zxy_to_tileid(z, x, y)
                 writer.write_tile(tile_id, tile_bytes)
                 lon1, lat1, lon2, lat2 = tile_bounds(z, x, y)
