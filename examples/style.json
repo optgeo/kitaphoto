@@ -1,0 +1,35 @@
+{
+  "version": 8,
+  "name": "kitaphoto (Hokkaido pilot) over seamlessphoto512",
+  "sources": {
+    "seamlessphoto512-high": {
+      "type": "raster",
+      "url": "pmtiles://https://depot.optgeo.org/seamlessphoto512.pmtiles",
+      "tileSize": 512,
+      "attribution": "国土地理院 シームレス空中写真 (GSI seamlessphoto) CC BY 4.0"
+    },
+    "kitaphoto-low": {
+      "type": "raster",
+      "_comment": "TODO: replace with the hosted URL once the pilot archive is deployed (see HANDOVER.md next steps). Locally, point this at pyramid_v4.pmtiles served via `pmtiles serve`.",
+      "url": "pmtiles://https://TODO-host-this/kitaphoto-hokkaido.pmtiles",
+      "tileSize": 512,
+      "attribution": "国土地理院 シームレス空中写真 (GSI seamlessphoto) CC BY 4.0, reprocessed by kitaphoto"
+    }
+  },
+  "layers": [
+    {
+      "id": "kitaphoto-low",
+      "type": "raster",
+      "source": "kitaphoto-low",
+      "minzoom": 0,
+      "maxzoom": 13
+    },
+    {
+      "id": "seamlessphoto512-high",
+      "type": "raster",
+      "source": "seamlessphoto512-high",
+      "minzoom": 13,
+      "maxzoom": 18
+    }
+  ]
+}

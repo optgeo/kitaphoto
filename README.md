@@ -51,29 +51,36 @@ originally considered for this project.
 
 1. **Extract** — `pmtiles extract` the z13 seed tiles (and, as a fallback source, the existing
    z1–12 tiles) for the target bbox from `https://depot.optgeo.org/seamlessphoto512.pmtiles`.
-2. **Downsample** (`scripts/downsample.py`) — build the z12→z1(ish) pyramid via 2×2 box
-   averaging + JPEG re-encode, cascading down from the z13 seed. Where the seed has no coverage
-   for a quadrant, fall back — in order — to (a) the original low-zoom GSI tile as packaged in
-   depot's archive, cropped to the matching sub-region, then (b) GSI's own live seamlessphoto
-   endpoint, fetched fresh. Tier (b) exists because depot's z1-12 layer turns out to have a
-   systemic corruption problem (7.4% of tiles in our sample decode to literal all-zero bytes)
-   that GSI's live server doesn't have — see HANDOVER.md.
-3. **Ship as a patch archive** — the output only covers the zoom range it actually changes
-   (roughly z1/4–12). z13–17 are left exactly as published in the original archive; there's no
-   need to duplicate 190GB of unchanged data. At serving time, combine as two raster sources by
-   zoom range (same pattern as
-   [hfu/japan-seamless-aerial-z18](https://github.com/hfu/japan-seamless-aerial-z18)'s viewer).
-   `scripts/merge.py` (a `go-pmtiles merge`-panic-safe reimplementation) is available if a
-   single self-contained file is ever wanted instead.
-4. **Verify** — `pmtiles verify`, plus visual spot checks across the z12/z13 boundary and in
-   satellite-only areas.
+2. **Clean the seed** — before downsampling, replace pure-black (0,0,0) nodata pixels *within*
+   otherwise-present z13 tiles (coastlines crossing a tile diagonally, or tiles that are
+   entirely nodata despite decoding as a valid JPEG — about 13% of tiles in our sample have
+   some) with GSI's own live tile at the same z/x/y, pixel-for-pixel. Without this, those
+   nodata pixels get baked into the output as literal black, even though the tile is otherwise
+   "present" and would never trigger the quadrant-level fallback in step 3.
+3. **Downsample** (`scripts/downsample.py`) — build the z12→z1(ish) pyramid via 2×2 box
+   averaging + JPEG re-encode, cascading down from the cleaned z13 seed. Where the seed has no
+   coverage for a whole quadrant, fall back — in order — to (a) the original low-zoom GSI tile
+   as packaged in depot's archive, cropped to the matching sub-region, then (b) GSI's own live
+   seamlessphoto endpoint, fetched fresh. Tier (b) exists because depot's z1-12 layer turns out
+   to have a systemic corruption problem (7.4% of tiles in our sample decode to literal
+   all-zero bytes) that GSI's live server doesn't have — see HANDOVER.md.
+4. **Ship as a patch archive, composed by zoom range in style.json — not merged.** The output
+   only covers the zoom range it actually changes (roughly z1/4–12). z13–17 are left exactly as
+   published in the original archive; there's no need to duplicate 190GB of unchanged data.
+   `examples/style.json` + `examples/index.html` show the pattern: two raster sources
+   (`kitaphoto-low`, `seamlessphoto512-high`) with adjacent, non-overlapping zoom ranges, same
+   idea as [hfu/japan-seamless-aerial-z18](https://github.com/hfu/japan-seamless-aerial-z18)'s
+   viewer. `scripts/merge.py` (a `go-pmtiles merge`-panic-safe reimplementation) stays available
+   if a single self-contained file is ever wanted instead, but is no longer the primary plan.
+5. **Verify** — `pmtiles verify`, plus visual spot checks across the z12/z13 boundary and in
+   satellite-only/nodata-edge areas.
 
 See [HANDOVER.md](HANDOVER.md) for current status, size measurements, and validation findings.
 
 ## Requirements
 
 `go-pmtiles` (`pmtiles` CLI, for `extract`/`show`/`tile`/`verify` — its `merge` subcommand is
-known broken, see HANDOVER.md) and Python 3 with `pmtiles`, `Pillow`, and `requests`.
+known broken, see HANDOVER.md) and Python 3 with `pmtiles`, `Pillow`, `numpy`, and `requests`.
 
 ## Data source and attribution
 

@@ -252,6 +252,83 @@ vs. the ~2m40s no-network-fallback run.
 
 **Current state: zero known unrecoverable gaps in the Hokkaido pilot region.**
 
+## Size correction (2026-07-19)
+
+User's preview feedback referenced "北海道で750GB" — the actual pilot output
+(`pyramid_v3.pmtiles`, z4-13) is **746 MB**, not GB (three orders of magnitude smaller). 715GB
+is the *original*, nationwide `seamlessphoto512.pmtiles` — a fixed, unrelated number, not
+something this project reproduces or duplicates. Nationwide kitaphoto output is estimated at
+~3GB (extrapolating from the nationwide z13-seed dry-run measurement, 2.3GB, via the same 4/3
+pyramid-sum ratio) — trivially cheap, confirming nationwide rollout is realistic once the pilot
+algorithm is finalized.
+
+## Deployment shape confirmed: style.json zoom-range composition, not a merged file
+
+User independently arrived at the same conclusion as the "Deliverable shape" decision above and
+asked for it to be made concrete: don't merge kitaphoto's z1-12 output with the original
+z13-17 into one file at all — reference both archives directly from a MapLibre style, each
+restricted to its own zoom range via the pmtiles protocol (`"url": "pmtiles://..."` sources).
+Added `examples/style.json` + `examples/index.html` (pattern lifted from
+`hfu/japan-seamless-aerial-z18`'s viewer) as the reference implementation. The `kitaphoto-low`
+source URL is a `TODO` placeholder pending deployment (see "Next steps").
+
+Note for the final deployment build: `pyramid_v4.pmtiles` (like v3 before it) includes the
+cleaned z13 seed as "included for reference" — the real deliverable should probably trim that
+out (ship only z4-12, or whatever the agreed min zoom is) since z13 is redundant with what
+`seamlessphoto512-high` already serves and the style.json's zoom ranges are already non-
+overlapping (`kitaphoto-low` maxzoom 13 is exclusive per the MapLibre style spec, `seamlessphoto512-high`
+minzoom 13 inclusive — no double-render either way, but no reason to ship the extra ~636MB).
+
+## Pixel-level black-nodata cleaning — implemented and validated (2026-07-19)
+
+User's specific ask: rather than only handling *whole missing tiles/quadrants* (already fixed
+above), treat pure-black (0,0,0) pixels *within an otherwise-present* seed tile as nodata too,
+and replace them with satellite imagery instead of leaving literal black — e.g. a coastline
+that crosses a tile diagonally, where the seed photo only covers part of the tile and the rest
+is black padding.
+
+**Quantified first**: scanned all 8,887 z13 seed tiles for pure-black pixel fraction:
+
+| black-pixel fraction | tile count |
+|---|---|
+| 0–1% (negligible) | 7,711 |
+| 1–10% | 141 |
+| 10–50% | 504 |
+| 50–99% | 500 |
+| 99–100% (near/fully black) | 31 |
+
+**1,176 of 8,887 tiles (13.2%) have meaningful black content** — including 31 tiles that are
+*entirely* nodata despite decoding as valid JPEGs (invisible to every prior check, since
+"decodes successfully" was the only presence test). This is a bigger and more common problem
+than the whole-tile-missing case fixed earlier.
+
+**Fix**: `load_level()` now calls `clean_seed_tile(img, zoom, x, y)` on every decoded seed
+tile. It builds a boolean mask of exact-(0,0,0) pixels via numpy, and if any exist, fetches
+GSI's own live tile at the *same* z/x/y (same call as the existing `fetch_gsi_tile()`, so
+`functools.lru_cache` shares hits with the quadrant-fallback path) and composites it in via
+`PIL.Image.composite()` — real photo pixels are left untouched, only exact-black pixels are
+replaced. GSI's tile at this zoom is satellite imagery, not aerial photo (z13 in 256px terms
+falls in GSI's own z9-13 Landsat range — see the zoom/source table in README.md), so this is
+the correct "activate the satellite imagery" source, matching the quadrant-level fallback
+design.
+
+Re-ran the full Hokkaido bbox build (`pyramid_v4.pmtiles`): **1,412 tiles cleaned** (slightly
+more than the 1,176 "meaningful" count above, since cleaning triggers on *any* black pixel, not
+just >0.1%). Total build time 5m07s (up from 2m47s in v3 — the extra ~1,400 GSI live requests
+for cleaning are a distinct cache key space from the ~416 quadrant-fallback requests, so they
+don't overlap).
+
+**Verified visually**:
+- Two tiles that were previously **100% black** (13/7308/3048, 13/7283/3041) now show real
+  satellite ocean texture (dark blue, faint wave texture) — the whole-black case degrades
+  gracefully into "use satellite everywhere," exactly like a properly-missing tile would.
+- A **partial coastline tile** (13/7468/2942, ~25% black — a sharp rectangular block in the
+  bottom-right corner in the original) now has that block filled with matching satellite ocean
+  texture; the real aerial-photo coastline in the rest of the tile is pixel-for-pixel
+  unaffected. Side-by-side before/after confirms no bleed into the real photo region.
+
+**Current state: the pilot's known black-hole and nodata-edge issues are both resolved.**
+
 ## Next steps
 
 1. Run the full pipeline for **all** z4 tiles needed to cover Hokkaido properly (this session
@@ -261,10 +338,14 @@ vs. the ~2m40s no-network-fallback run.
    extent within the bbox); confirm whether the real deliverable should extend further down
    (z1-3) using the original low-zoom tiles unmodified (they're already appropriately coarse
    world/nationwide mosaics at that level) or stop at z4.
-3. Write a small end-user viewer (à la `hfu/japan-seamless-aerial-z18`'s `index.html`) to
-   preview the patch archive layered under the original z13-17, for a final visual sign-off
-   before considering deployment to `stars.optgeo.org`'s martin catalog.
-4. Consider whether to report the depot.optgeo.org z1-12 corruption (7.4% of tiles in the
+3. Trim the final deliverable archive to exclude the z13 seed passthrough (see "Deployment
+   shape" above) before hosting it.
+4. Decide where `kitaphoto-low` gets hosted (depot.optgeo.org alongside the original? stars.optgeo.org's
+   martin catalog, matching `freetown-mapterhorn`'s precedent?) and fill in `examples/style.json`'s
+   TODO URL accordingly.
+5. Once the above are settled, re-run for the whole of Japan (estimated ~3GB output, ~2.3GB
+   nationwide z13 seed extract) rather than just the Hokkaido pilot tile.
+6. Consider whether to report the depot.optgeo.org z1-12 corruption (7.4% of tiles in the
    Hokkaido sample) upstream to whoever maintains that build, independent of this project —
    it likely affects every consumer of `seamlessphoto512.pmtiles`'s low zoom levels, not just
    this pipeline.

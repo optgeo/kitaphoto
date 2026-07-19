@@ -17,6 +17,18 @@ tried first because it's already local/extracted and doesn't need network
 round-trips; tier 2 only runs for the minority of quadrants where tier 1 is
 itself missing or corrupt.
 
+Separately, individual seed tiles can be *present* but still contain pure
+black (0,0,0) nodata padding for sub-regions outside the real photo's actual
+footprint (a coastline crossing the tile diagonally, or — in ~6% of tiles in
+our sample — the whole tile being nodata despite decoding as a valid JPEG).
+Because this is invisible to the "is this tile present at all" checks above,
+it was previously baked into the output as literal black. `clean_seed_tile()`
+detects black pixels within an otherwise-present tile and replaces them,
+pixel-for-pixel, with GSI's own same-zoom live tile (which is satellite
+imagery at this zoom range, not aerial — see HANDOVER.md's zoom/source
+table) — the same idea as the quadrant-level fallback, just at finer
+granularity so partial coastline tiles don't lose their black corner.
+
 Usage: python downsample.py <seed.pmtiles> <seed_zoom> <fallback.pmtiles> <output.pmtiles>
 """
 import functools
@@ -24,6 +36,7 @@ import io
 import sys
 from collections import defaultdict
 
+import numpy as np
 import requests
 from PIL import Image, UnidentifiedImageError
 
@@ -40,17 +53,41 @@ _http = requests.Session()
 
 
 def load_level(path, zoom):
-    """Return {(x, y): PIL.Image} for the given zoom level."""
+    """Return {(x, y): PIL.Image} for the given zoom level, with black nodata
+    pixels within each tile replaced by GSI's own satellite imagery."""
     tiles = {}
+    n_cleaned = 0
     with open(path, 'r+b') as f:
         reader = Reader(MmapSource(f))
         for (z, x, y), tile_bytes in all_tiles(reader.get_bytes):
             if z != zoom:
                 continue
             img = safe_decode(tile_bytes)
-            if img is not None:
-                tiles[(x, y)] = img
+            if img is None:
+                continue
+            img, cleaned = clean_seed_tile(img, zoom, x, y)
+            n_cleaned += cleaned
+            tiles[(x, y)] = img
+    print(f'  cleaned black nodata pixels in {n_cleaned:_} tiles')
     return tiles
+
+
+def clean_seed_tile(img, zoom, x, y):
+    """Replace pure-black (0,0,0) pixels in `img` with the corresponding
+    pixels from GSI's live tile at the same (zoom, x, y) — same index space,
+    but satellite content rather than aerial photo at this zoom range (see
+    module docstring). Returns (img, was_cleaned: bool)."""
+    arr = np.asarray(img)
+    black = np.all(arr == 0, axis=-1)
+    if not black.any():
+        return img, False
+    reference = fetch_gsi_tile(zoom, x, y)
+    if reference is None:
+        return img, False
+    if reference.size != img.size:
+        reference = reference.resize(img.size, Image.LANCZOS)
+    mask = Image.fromarray((black * 255).astype(np.uint8))
+    return Image.composite(reference, img, mask), True
 
 
 def safe_decode(tile_bytes):
@@ -237,10 +274,11 @@ def main():
             {
                 'attribution': '国土地理院 シームレス空中写真 (GSI seamlessphoto) CC BY 4.0',
                 'description': (
-                    f'kitaphoto: z{seed_zoom} GSI seamlessphoto512 downsampled '
-                    f'to z{min_zoom}-{max_zoom - 1} via 2x2 box averaging, with '
-                    f'depot low-zoom satellite mosaic and GSI live tiles as fallback '
-                    f'for gaps (z{max_zoom} is the untouched seed, included for reference)'
+                    f'kitaphoto: z{seed_zoom} GSI seamlessphoto512 (with black nodata '
+                    f'pixels cleaned via GSI live satellite tiles) downsampled to '
+                    f'z{min_zoom}-{max_zoom - 1} via 2x2 box averaging, with depot low-zoom '
+                    f'satellite mosaic and GSI live tiles as fallback for gaps '
+                    f'(z{max_zoom} is the cleaned seed, included for reference)'
                 ),
             },
         )
