@@ -130,10 +130,106 @@ any real local seam into noise, while incidentally strong full-length features
 **Lesson**: seam detection needs to work in 2D, matching actual (roughly
 rectangular) photo-tile footprints — not a 1D projection across the whole image.
 
+## Prior-art survey, then small OSS tool trials (2026-07-19)
+
+Before attempt 3, stepped back to survey what prior research and off-the-shelf tools
+already exist for this exact problem, rather than keep hand-rolling heuristics. The
+problem splits into three sub-problems with distinct literatures:
+
+1. **Where is the seam** (seamline placement) — classically solved by searching a
+   min-cost path through the *known overlap region* between two images: dynamic
+   programming, or Kwatra et al.'s graph-cut formulation ("Graphcut Textures", 2003).
+   Academic work specific to orthomosaics (many overlapping images, not just a pair)
+   exists too: "Global seamline networks for orthomosaic generation via local search."
+2. **How to match color across it** (radiometric harmonization) — histogram/moment
+   matching or photogrammetric "dodging" (per-image polynomial correction toward a
+   target color surface); this is what attempt 1 above was a crude, un-segmented
+   version of.
+3. **How to blend smoothly across it** — multi-band/Laplacian-pyramid blending (Burt
+   & Adelson, 1983) is the classic answer; feathering is the cheap approximation ODM
+   uses.
+
+Two concrete, well-known OSS candidates: **OpenCV's `stitching`/`detail` module**
+(`DpSeamFinder`, `GraphCutSeamFinder`, `MultiBandBlender` — general-purpose, easy to
+reach for) and **MicMac's `Tawny`** (IGN France's own orthomosaic radiometric
+equalization tool — directly relevant as another national mapping agency's answer to
+this exact problem). Rather than keep reasoning about these in the abstract, tried
+both directly against the Fukuoka data, small.
+
+### OpenCV `stitching`/`detail`
+
+`scripts/experiments/opencv_blend/test_multiband.py` loads two adjacent z13 tiles and
+runs `DpSeamFinder`, `GraphCutSeamFinder`, and `MultiBandBlender` on them.
+
+**Seam finders found nothing to do** — `0` mask pixels changed from the input, on
+every tile pair tried. This is expected, not a bug: DP/graph-cut seam finders search
+*within a known overlap region* between two images (the classic panorama-stitching
+setup). GSI's published tiles are already hard-cut with **zero overlap** between
+neighbors — there's no overlap region for these algorithms to search. This confirms,
+empirically, why attempt 2's from-scratch seam detection was fighting an uphill
+battle: the tools built for this problem assume input data we don't have access to as
+downstream consumers of the final tiled product.
+
+**`MultiBandBlender` does run** (it doesn't need seam-finding — you can hand it a
+known hard boundary directly), but demonstrating it convincingly turned out to need
+more careful test-data curation than expected. An automated "find the two adjacent
+tiles with the largest mean-color difference" search — the same instinct behind
+attempt 1 — mostly rediscovered attempt 1's problem: the biggest differences were land
+cover transitions (farmland → forested mountain) or the aerial-photo/satellite-gap-fill
+boundary that `downsample.py` already handles, not two-different-real-photos seams.
+The clearest example found (tiles 7059,3281 / 7060,3281, a coastal/harbor scene) turned
+out to straddle exactly that aerial/satellite boundary rather than an orthophoto-internal
+one:
+
+| Before | After (MultiBandBlender) |
+|---|---|
+| ![before](scripts/experiments/opencv_blend/images/before.png) | ![after](scripts/experiments/opencv_blend/images/after_multiband.png) |
+
+The blend is visually subtle and reasonable where it applies, but this wasn't the
+target case. **Locating a clean, unambiguous example of two different real aerial
+photos meeting — without any source/footprint metadata — turned out to be nearly as
+hard as detecting the seam itself.** That's itself a useful data point: even a
+demo requires information we don't have.
+
+### MicMac `Tawny` (via Docker, `mzellou/micmac`)
+
+Ran directly: `mm3d Tawny . Out=test_mosaic.tif` against a directory containing two
+of our tiles. Failed immediately, looking for MicMac-native input:
+
+```
+"NKS-Set-OfPattern@^Ort_(.*)\.tif": 0 matches.
+For required file [./MTDOrtho.xml]
+Cannot open
+```
+
+This confirms the same architectural point directly: Tawny's radiometric equalization
+runs on the output of MicMac's own `Porto` orthorectification stage —
+`Ort_*.tif` tiles plus an `MTDOrtho.xml` describing each tile's footprint/overlap,
+generated earlier in MicMac's own photogrammetric pipeline (camera orientation, bundle
+adjustment, etc.). **It cannot be pointed at arbitrary pre-baked orthophoto tiles from
+a different pipeline** — it needs the overlap/footprint metadata that only exists
+*before* the images get flattened into a single mosaic per tile, which is exactly the
+information GSI's `seamlessphoto512.pmtiles` (and depot's re-tiled version of it) no
+longer carries.
+
+### What this settles
+
+Both DP/graph-cut seam finding and MicMac's Tawny — probably the two most credible
+off-the-shelf answers to this problem — **require access to the original overlapping
+per-photo imagery with known geometry, upstream of GSI's own mosaicking step**. As an
+external consumer of the already-published `seamlessphoto512.pmtiles`, that
+information isn't available. Any further attempt at this from kitaphoto's position
+needs either (a) GSI's own internal photo/flight footprint data (out of reach for this
+project) or (b) inferring seams and matching regions purely from pixels — which is
+exactly what attempts 1 and 2 above already tried, without success.
+
 ## Conclusion
 
-Neither attempt produced a usable color-harmonization result. Both failures are
-informative, though:
+Neither color-harmonization attempt (1 or 2) produced a usable result, and the
+follow-up survey confirms the standard tools for this problem (OpenCV's seam finders,
+MicMac's Tawny) aren't directly usable either, for a structural reason rather than a
+tuning one: they need overlap/footprint metadata that doesn't survive into the
+published tiled product. Both failures are informative, though:
 
 - Attempt 1 confirms color-based segmentation alone can't distinguish "same
   photo source" from "same land cover" — any future approach needs a different
@@ -144,7 +240,14 @@ informative, though:
   genuine 2D block/rectangle detection, closer to what orthomosaic software does
   with actual camera footprint metadata, rather than inferring boundaries purely
   from pixel statistics after the fact.
+- The OSS survey confirms *why* attempt 2's instinct (real seams, real tools) still
+  wasn't enough: the standard tools assume access to pre-mosaic overlap data that
+  simply isn't in `seamlessphoto512.pmtiles`. This reframes the open problem — it's
+  not "which blending algorithm" but "how to recover or approximate footprint/overlap
+  information from a single already-flattened image per tile."
 
 **This idea is shelved for now, not abandoned** — color harmonization across
-GSI's orthophoto mosaic seams remains a real, open problem worth revisiting with
-a properly 2D, footprint-aware approach if there's appetite for a third attempt.
+GSI's orthophoto mosaic seams remains a real, open problem. The most promising
+untried direction is asking whether GSI has (or could expose) the original per-photo
+footprint/flight metadata Tawny-style tools actually need, rather than continuing to
+infer it from pixels alone.
