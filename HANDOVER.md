@@ -1,5 +1,54 @@
 # Project Handover — kitaphoto
 
+## Nationwide rollout in progress (2026-07-19)
+
+Pilot algorithm accepted after the black-nodata-pixel fix. User decisions for the production
+run:
+
+- **Persistent checkout**: moved off session scratch space to `/Users/hfu/kitaphoto` (plain
+  `git clone` of `optgeo/kitaphoto`, same remote). All further work happens there.
+- **Output filename**: `kitaphoto.pmtiles` (previously ad-hoc `pyramid_v*.pmtiles` test names).
+  This name is kept stable even after nationwide rollout (no `-hokkaido`/`-japan` suffix) —
+  it's one evolving deliverable, not a per-region artifact.
+- `kitaphoto.pmtiles` lives in `dst/` and is `.gitignore`d, same as `hfu/kitavolca`'s
+  `dst/*.pmtiles` — never committed to the repo.
+- **Deploy target confirmed**: `stars.local:/home/stars/data/`, same host that already serves
+  both `stars.optgeo.org` and `depot.optgeo.org` via martin — copying there and restarting
+  martin publishes to both. `just upload` (added to `Justfile`, mirroring `hfu/kitavolca`'s
+  exact `rsync --progress <file> stars@stars.local:/home/stars/data/` pattern) handles the
+  copy; the martin restart is a deliberate separate manual step (shared production service,
+  not something to fold into an unattended `just` recipe).
+- **Min zoom lowered to 2** (was 4, limited by the Hokkaido pilot bbox's natural single-tile
+  convergence). `downsample.py` now takes an explicit min-zoom argument and keeps cascading
+  past single-tile convergence rather than stopping early — validated on the Hokkaido test data
+  first (see "z2/trim validation" below) before committing to the nationwide run.
+- **z13 seed trimmed from the output.** It's redundant with what `seamlessphoto512.pmtiles`
+  already serves at z13+; `downsample.py` now writes only z(min_zoom)-12. Composition with the
+  original happens via `examples/style.json`'s disjoint zoom ranges, not by shipping duplicate
+  data.
+- Added `Justfile` (`extract` / `downsample` / `verify` / `upload` / `clean`), mirroring
+  `hfu/kitavolca`'s structure and defaulting to the nationwide bbox (override via `BBOX=...`).
+
+### z2/trim validation (before committing to the nationwide run)
+
+Re-ran the Hokkaido pilot's already-extracted seed/fallback data through the updated
+`downsample.py` (target min zoom 2, seed excluded from output): `work/hokkaido_test_v5.pmtiles`
+— 3,421 tiles, confirmed `min zoom: 2, max zoom: 12` (z13 correctly absent), single-tile
+levels z2-z4 all produced without errors or new fallback failures (the z1-12 depot fallback
+archive already covers z1-2, so no gap in coverage from extending the cascade). Only then
+proceeded to the nationwide extract.
+
+### Nationwide extract (real, not dry-run)
+
+Against the full archive bounds (`122.920532,20.406420,153.989868,45.541946`):
+
+- `work/seed_z13.pmtiles`: 2.3GB, 31,815 tile entries (5m25s)
+- `work/fallback_z1-12.pmtiles`: 1.4GB, 89,336 tile entries (2m51s)
+
+Matches the earlier dry-run estimates (2.3GB / 1.4-1.5GB) closely. Nationwide downsample build
+kicked off immediately after (`just downsample`, running as of this writing — see below for
+results once complete).
+
 ## Status: pilot pipeline proven end-to-end on real data (2026-07-19)
 
 `scripts/downsample.py` + `scripts/merge.py` successfully built and validated a real z4-13

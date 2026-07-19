@@ -29,7 +29,17 @@ imagery at this zoom range, not aerial — see HANDOVER.md's zoom/source
 table) — the same idea as the quadrant-level fallback, just at finer
 granularity so partial coastline tiles don't lose their black corner.
 
-Usage: python downsample.py <seed.pmtiles> <seed_zoom> <fallback.pmtiles> <output.pmtiles>
+The seed zoom itself is never written to the output — it's redundant with
+what the original archive already serves at that zoom and above, and the
+deployment plan is to compose the two by (disjoint) zoom range in a style.json
+rather than duplicate data (see README.md / examples/style.json).
+
+Usage: python downsample.py <seed.pmtiles> <seed_zoom> <fallback.pmtiles> <output.pmtiles> [min_zoom]
+
+min_zoom (default 2): the pyramid keeps cascading down to this zoom even
+after it converges to a single tile (harmless — a single coarse tile is a
+normal thing to have at low global zooms), rather than stopping as soon as
+the tile count reaches 1.
 """
 import functools
 import io
@@ -222,6 +232,7 @@ def tile_bounds(z, x, y):
 def main():
     seed_path, seed_zoom_s, fallback_path, output_path = sys.argv[1:5]
     seed_zoom = int(seed_zoom_s)
+    target_min_zoom = int(sys.argv[5]) if len(sys.argv) > 5 else 2
 
     print(f'loading seed level z{seed_zoom} from {seed_path}...')
     level = load_level(seed_path, seed_zoom)
@@ -233,21 +244,24 @@ def main():
 
     levels = {seed_zoom: level}
     z = seed_zoom
-    while z > 1 and len(levels[z]) > 1:
+    while z > target_min_zoom:
         prev = levels[z]
         nxt = downsample_level(prev, z, fallback_index)
         z -= 1
         levels[z] = nxt
         print(f'  z{z}: {len(nxt):_} tiles')
 
-    min_zoom = min(levels)
-    max_zoom = max(levels)
+    # The seed zoom itself is never written — it stays served straight from
+    # the original archive (see module docstring).
+    written_zooms = [z for z in levels if z != seed_zoom]
+    min_zoom = min(written_zooms)
+    max_zoom = max(written_zooms)
 
     min_lon, min_lat, max_lon, max_lat = 180.0, 90.0, -180.0, -90.0
     total = 0
     with open(output_path, 'wb') as out_f:
         writer = Writer(out_f)
-        for z in sorted(levels):
+        for z in sorted(written_zooms):
             for (x, y), img in sorted(levels[z].items()):
                 tile_bytes = encode_jpeg(img)
                 tile_id = zxy_to_tileid(z, x, y)
@@ -276,9 +290,10 @@ def main():
                 'description': (
                     f'kitaphoto: z{seed_zoom} GSI seamlessphoto512 (with black nodata '
                     f'pixels cleaned via GSI live satellite tiles) downsampled to '
-                    f'z{min_zoom}-{max_zoom - 1} via 2x2 box averaging, with depot low-zoom '
-                    f'satellite mosaic and GSI live tiles as fallback for gaps '
-                    f'(z{max_zoom} is the cleaned seed, included for reference)'
+                    f'z{min_zoom}-{max_zoom} via 2x2 box averaging, with depot low-zoom '
+                    f'satellite mosaic and GSI live tiles as fallback for gaps. '
+                    f'z{seed_zoom}+ intentionally not included here — served from the '
+                    f'original seamlessphoto512.pmtiles instead, see examples/style.json'
                 ),
             },
         )

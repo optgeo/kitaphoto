@@ -1,5 +1,6 @@
+src/
+dst/
+work/
 *.pmtiles
-*.jpg
-*.jpeg
-.venv/
 __pycache__/
+.venv/
