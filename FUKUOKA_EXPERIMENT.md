@@ -223,13 +223,53 @@ needs either (a) GSI's own internal photo/flight footprint data (out of reach fo
 project) or (b) inferring seams and matching regions purely from pixels — which is
 exactly what attempts 1 and 2 above already tried, without success.
 
+### A third tool family: OpenAerialMap / marblecutter
+
+Checked one more OSS lineage: [HOTOSM's OpenAerialMap](https://github.com/hotosm/OpenAerialMap)
+stack ([`oam-api`](https://github.com/hotosm/oam-api) catalog,
+[`oam-dynamic-tiler`](https://github.com/hotosm/oam-dynamic-tiler) and its successor
+[`marblecutter`](https://github.com/mojodna/marblecutter), plus the newer
+[`cogeo-mosaic`](https://github.com/developmentseed/cogeo-mosaic)/TiTiler-mosaic
+approach) — this is the "serve a mosaic of many independently-captured aerial/drone
+images" problem, closer to kitaphoto's actual situation than panorama stitching or
+full photogrammetric reconstruction.
+
+**A genuinely useful cross-reference turned up**: [hotosm/OpenAerialMap issue
+#129](https://github.com/hotosm/OpenAerialMap/issues/129), "User mosaic stitching
+problem," is marblecutter's author (mojodna) independently diagnosing almost exactly
+kitaphoto's black-nodata-pixel problem — JPEG-compressed imagery without a proper
+alpha/mask channel lets NODATA values bleed through as black artifacts at tile edges.
+One proposed fix in that thread: *"A way to fight these artifacts is to fill black
+under mask with average color of not-NODATA pixels"* — this is the same idea as
+`downsample.py`'s `clean_seed_tile()` (fill black pixels from a reference source),
+independently arrived at by a production system. Good validation that the black-pixel
+fix wasn't an ad hoc hack.
+
+**But**: checked marblecutter's README and `marblecutter-tools`' documented feature
+set directly (image transcoding to COG, block/mask/overview generation, source
+selection and priority ordering for which image wins at a given tile) — **no mention
+of color correction, color balancing, histogram matching, or radiometric harmonization
+anywhere in either**. OAM's stack solves *which* image to show per tile and how to
+handle nodata cleanly; it does not touch making genuinely different source images
+look consistent with each other.
+
+That's a third, independent tool family (panorama stitching → OpenCV; full
+photogrammetry → MicMac; imagery cataloging/serving → OpenAerialMap) confirming the
+same boundary: **radiometric harmonization across independently-captured images lives
+exclusively in the photogrammetry-pipeline tools that have access to per-image
+overlap/footprint data (Tawny, ArcGIS dodging) — nothing in the
+post-hoc-serving/mosaicking tool family does this**, regardless of whether that family
+is built for camera panoramas or for cataloged aerial imagery.
+
 ## Conclusion
 
 Neither color-harmonization attempt (1 or 2) produced a usable result, and the
 follow-up survey confirms the standard tools for this problem (OpenCV's seam finders,
-MicMac's Tawny) aren't directly usable either, for a structural reason rather than a
-tuning one: they need overlap/footprint metadata that doesn't survive into the
-published tiled product. Both failures are informative, though:
+MicMac's Tawny, and OpenAerialMap's marblecutter/cogeo-mosaic lineage) aren't directly
+usable either, for a structural reason rather than a tuning one: they need
+overlap/footprint metadata that doesn't survive into the published tiled product, or
+(OAM's case) don't attempt cross-image color harmonization at all. Both failures are
+informative, though:
 
 - Attempt 1 confirms color-based segmentation alone can't distinguish "same
   photo source" from "same land cover" — any future approach needs a different
