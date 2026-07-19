@@ -10,7 +10,7 @@ of many separate source photos/flight lines, each with its own color cast (captu
 date, sun angle, sensor, atmospheric correction). Those casts don't match at the
 seams, so wide-area views look like a patchwork of visibly different-toned
 rectangles rather than one continuous photograph — most visible in
-[hfu/kitaphoto](https://github.com/hfu/kitaphoto)'s own low-zoom pyramid, since
+[optgeo/kitaphoto](https://github.com/optgeo/kitaphoto)'s own low-zoom pyramid, since
 box-averaging doesn't erase a source photo's characteristic tone, only its local
 texture.
 
