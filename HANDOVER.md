@@ -446,21 +446,17 @@ don't overlap).
 
 ## Next steps
 
-1. Run the full pipeline for **all** z4 tiles needed to cover Hokkaido properly (this session
-   only processed the single z4/14/5 tile — confirm whether that one tile's coverage is
-   actually sufficient, or whether Hokkaido's true extent needs neighboring z4 tiles too).
-2. Decide on final min zoom — this run went down to z4 (limited by the seed data's actual
-   extent within the bbox); confirm whether the real deliverable should extend further down
-   (z1-3) using the original low-zoom tiles unmodified (they're already appropriately coarse
-   world/nationwide mosaics at that level) or stop at z4.
-3. Trim the final deliverable archive to exclude the z13 seed passthrough (see "Deployment
-   shape" above) before hosting it.
-4. Decide where `kitaphoto-low` gets hosted (depot.optgeo.org alongside the original? stars.optgeo.org's
-   martin catalog, matching `freetown-mapterhorn`'s precedent?) and fill in `docs/style.json`'s
-   TODO URL accordingly.
-5. Once the above are settled, re-run for the whole of Japan (estimated ~3GB output, ~2.3GB
-   nationwide z13 seed extract) rather than just the Hokkaido pilot tile.
+1. ~~Run the full pipeline nationwide~~ — done, live at `stars.optgeo.org/kitaphoto`.
+2. ~~Decide on final min zoom~~ — done, z2.
+3. ~~Trim the z13 seed passthrough from the output~~ — done.
+4. ~~Decide where `kitaphoto-low` gets hosted~~ — done, `stars.optgeo.org` via martin, same host
+   as `depot.optgeo.org`.
+5. ~~Deploy nationwide~~ — done.
 6. Consider whether to report the depot.optgeo.org z1-12 corruption (7.4% of tiles in the
    Hokkaido sample) upstream to whoever maintains that build, independent of this project —
    it likely affects every consumer of `seamlessphoto512.pmtiles`'s low zoom levels, not just
-   this pipeline.
+   this pipeline. Not yet done.
+7. **Color harmonization across orthophoto-internal seams** — explored in a separate small
+   Fukuoka experiment, see [FUKUOKA_EXPERIMENT.md](FUKUOKA_EXPERIMENT.md). Two attempts (color-
+   cluster segmentation, straight-line seam detection) both failed to produce a usable result;
+   documented as a negative result with root-cause analysis for whoever picks this up next.
