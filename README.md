@@ -66,7 +66,7 @@ built.
 4. **Ship as a patch archive, composed by zoom range in style.json — not merged.** The output
    only covers the zoom range it actually changes (roughly z1/4–12). z13–17 are left exactly as
    published in the original archive; there's no need to duplicate 190GB of unchanged data.
-   `examples/style.json` + `examples/index.html` show the pattern: two raster sources
+   `docs/style.json` + `docs/index.html` show the pattern: two raster sources
    (`kitaphoto-low`, `seamlessphoto512-high`) with adjacent, non-overlapping zoom ranges, same
    idea as [hfu/japan-seamless-aerial-z18](https://github.com/hfu/japan-seamless-aerial-z18)'s
    viewer. `scripts/merge.py` (a `go-pmtiles merge`-panic-safe reimplementation) stays available

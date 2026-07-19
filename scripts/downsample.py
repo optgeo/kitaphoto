@@ -32,7 +32,7 @@ granularity so partial coastline tiles don't lose their black corner.
 The seed zoom itself is never written to the output — it's redundant with
 what the original archive already serves at that zoom and above, and the
 deployment plan is to compose the two by (disjoint) zoom range in a style.json
-rather than duplicate data (see README.md / examples/style.json).
+rather than duplicate data (see README.md / docs/style.json).
 
 Usage: python downsample.py <seed.pmtiles> <seed_zoom> <fallback.pmtiles> <output.pmtiles> [min_zoom]
 
@@ -326,7 +326,7 @@ def main():
                     f'z{min_zoom}-{max_zoom} via 2x2 box averaging, with depot low-zoom '
                     f'satellite mosaic and GSI live tiles as fallback for gaps. '
                     f'z{seed_zoom}+ intentionally not included here — served from the '
-                    f'original seamlessphoto512.pmtiles instead, see examples/style.json'
+                    f'original seamlessphoto512.pmtiles instead, see docs/style.json'
                 ),
             },
         )

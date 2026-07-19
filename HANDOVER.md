@@ -24,7 +24,7 @@ run:
   first (see "z2/trim validation" below) before committing to the nationwide run.
 - **z13 seed trimmed from the output.** It's redundant with what `seamlessphoto512.pmtiles`
   already serves at z13+; `downsample.py` now writes only z(min_zoom)-12. Composition with the
-  original happens via `examples/style.json`'s disjoint zoom ranges, not by shipping duplicate
+  original happens via `docs/style.json`'s disjoint zoom ranges, not by shipping duplicate
   data.
 - Added `Justfile` (`extract` / `downsample` / `verify` / `upload` / `clean`), mirroring
   `hfu/kitavolca`'s structure and defaulting to the nationwide bbox (override via `BBOX=...`).
@@ -105,9 +105,15 @@ coverage with visible color/tone seams between adjacent source photos (different
 dates/sensors in GSI's own underlying mosaic) — expected mosaic character, not a processing
 defect.
 
-**Status: nationwide `dst/kitaphoto.pmtiles` built and verified. Not yet uploaded to
-stars.local — pending go-ahead, since that's a shared production service (`stars.optgeo.org` +
-`depot.optgeo.org` both read from the same martin instance).**
+### Deployed (2026-07-19)
+
+User approved deployment. `just upload` (rsync, 783MB, ~92s) to `stars.local:/home/stars/data/`,
+then `ssh stars.local 'systemctl --user restart martin'` — confirmed active. Verified live:
+`stars.optgeo.org/catalog` lists `kitaphoto` with the expected description/attribution, and
+`https://stars.optgeo.org/kitaphoto/9/454/201` returns `HTTP 200 image/jpeg`.
+
+**Status: live at `https://stars.optgeo.org/kitaphoto/{z}/{x}/{y}` (z2-12), nationwide.**
+`examples/` renamed to `docs/` next, for GitHub Pages hosting of the preview viewer.
 
 ## Status: pilot pipeline proven end-to-end on real data (2026-07-19)
 
@@ -377,7 +383,7 @@ User independently arrived at the same conclusion as the "Deliverable shape" dec
 asked for it to be made concrete: don't merge kitaphoto's z1-12 output with the original
 z13-17 into one file at all — reference both archives directly from a MapLibre style, each
 restricted to its own zoom range via the pmtiles protocol (`"url": "pmtiles://..."` sources).
-Added `examples/style.json` + `examples/index.html` (pattern lifted from
+Added `docs/style.json` + `docs/index.html` (pattern lifted from
 `hfu/japan-seamless-aerial-z18`'s viewer) as the reference implementation. The `kitaphoto-low`
 source URL is a `TODO` placeholder pending deployment (see "Next steps").
 
@@ -450,7 +456,7 @@ don't overlap).
 3. Trim the final deliverable archive to exclude the z13 seed passthrough (see "Deployment
    shape" above) before hosting it.
 4. Decide where `kitaphoto-low` gets hosted (depot.optgeo.org alongside the original? stars.optgeo.org's
-   martin catalog, matching `freetown-mapterhorn`'s precedent?) and fill in `examples/style.json`'s
+   martin catalog, matching `freetown-mapterhorn`'s precedent?) and fill in `docs/style.json`'s
    TODO URL accordingly.
 5. Once the above are settled, re-run for the whole of Japan (estimated ~3GB output, ~2.3GB
    nationwide z13 seed extract) rather than just the Hokkaido pilot tile.
