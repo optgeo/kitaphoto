@@ -1,0 +1,5 @@
+*.pmtiles
+*.jpg
+*.jpeg
+.venv/
+__pycache__/

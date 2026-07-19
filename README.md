@@ -49,15 +49,24 @@ originally considered for this project.
 
 ## Pipeline
 
-1. **Extract** — `pmtiles extract` the z13 seed tiles for the target bbox from
-   `https://depot.optgeo.org/seamlessphoto512.pmtiles`.
-2. **Downsample** — build the z12→z1 pyramid via 2×2 box averaging + JPEG re-encode.
-3. **Merge** — combine the new z1–12 pyramid with the original z13–17 tiles (pass-through,
-   unmodified) into one archive.
+1. **Extract** — `pmtiles extract` the z13 seed tiles (and, as a fallback source, the existing
+   z1–12 tiles) for the target bbox from `https://depot.optgeo.org/seamlessphoto512.pmtiles`.
+2. **Downsample** (`scripts/downsample.py`) — build the z12→z1(ish) pyramid via 2×2 box
+   averaging + JPEG re-encode, cascading down from the z13 seed. Where the seed has no coverage
+   for a quadrant, fall back to the original low-zoom GSI tile (cropped to the matching
+   sub-region) rather than leaving a black hole — see HANDOVER.md for why this matters in
+   practice (the source archive has real gaps, including at least one corrupt tile).
+3. **Ship as a patch archive** — the output only covers the zoom range it actually changes
+   (roughly z1/4–12). z13–17 are left exactly as published in the original archive; there's no
+   need to duplicate 190GB of unchanged data. At serving time, combine as two raster sources by
+   zoom range (same pattern as
+   [hfu/japan-seamless-aerial-z18](https://github.com/hfu/japan-seamless-aerial-z18)'s viewer).
+   `scripts/merge.py` (a `go-pmtiles merge`-panic-safe reimplementation) is available if a
+   single self-contained file is ever wanted instead.
 4. **Verify** — `pmtiles verify`, plus visual spot checks across the z12/z13 boundary and in
    satellite-only areas.
 
-See [HANDOVER.md](HANDOVER.md) for current status and findings.
+See [HANDOVER.md](HANDOVER.md) for current status, size measurements, and validation findings.
 
 ## Data source and attribution
 
